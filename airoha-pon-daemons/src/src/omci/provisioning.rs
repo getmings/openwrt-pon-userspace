@@ -39,6 +39,10 @@ pub struct ProvisioningSnapshot {
     pub igmp_upstream_vlan_ids: BTreeSet<u16>,
     /// Class 309 attribute 5: 0 transparent, 1 add, 2 replace TCI, 3 replace VID.
     pub igmp_upstream_tag_controls: BTreeSet<u8>,
+    /// Class 332 is present in the MIB.
+    pub enhanced_security: bool,
+    /// Key indexes with at least one Class 332 attribute 11 broadcast key fragment.
+    pub broadcast_key_indexes: BTreeSet<u8>,
     pub data_paths: Vec<DataPathCandidate>,
 }
 

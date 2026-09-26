@@ -271,6 +271,13 @@ fn status_json(inner: &Inner) -> String {
         .map(u8::to_string)
         .collect::<Vec<_>>()
         .join(",");
+    let broadcast_key_indexes = inner
+        .provisioning
+        .broadcast_key_indexes
+        .iter()
+        .map(u8::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
     let data_path_active = carrier != Some(false);
     let active_alloc_id = data_path_active
         .then_some(inner.backend.active_alloc_id)
@@ -307,6 +314,7 @@ fn status_json(inner: &Inner) -> String {
             "\"vlan_ids\":[{}],\"multicast_vlan_ids\":[{}],",
             "\"igmp_upstream_vlan_ids\":[{}],",
             "\"igmp_upstream_tag_controls\":[{}],",
+            "\"enhanced_security\":{},\"broadcast_key_indexes\":[{}],",
             "\"data_path_candidate_count\":{},",
             "\"data_path_all_vlans\":{},",
             "\"backend_state\":{},\"active_alloc_id\":{},",
@@ -333,6 +341,8 @@ fn status_json(inner: &Inner) -> String {
         multicast_vlan_ids,
         igmp_upstream_vlan_ids,
         igmp_upstream_tag_controls,
+        inner.provisioning.enhanced_security,
+        broadcast_key_indexes,
         inner.provisioning.data_paths.len(),
         data_path_all_vlans,
         json_string(backend_state),

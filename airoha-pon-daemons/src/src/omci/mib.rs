@@ -1156,6 +1156,16 @@ impl Mib {
                 .unwrap_or_default();
         }
 
+        if let Some(security) = self.entities.get(&(CLASS_ENHANCED_SECURITY_CONTROL, 0)) {
+            snapshot.enhanced_security = true;
+            /* Row identifier bits 7..6 carry the key index; bits 3..0 the fragment number. */
+            snapshot.broadcast_key_indexes = security
+                .attributes
+                .get(&11)
+                .map(|table| table.table_rows.keys().map(|row| row[0] >> 6).collect())
+                .unwrap_or_default();
+        }
+
         for (&(class_id, entity_id), entity) in &self.entities {
             if class_id != CLASS_TCONT {
                 continue;
@@ -1847,6 +1857,15 @@ mod tests {
         assert_eq!(set(&mut mib, &key1), Some(RESULT_SUCCESS));
         assert_eq!(set(&mut mib, &key2), Some(RESULT_SUCCESS));
         assert_eq!(rows(&mib), 2);
+        let snapshot = mib.provisioning_snapshot();
+        assert!(snapshot.enhanced_security);
+        assert_eq!(
+            snapshot
+                .broadcast_key_indexes
+                .into_iter()
+                .collect::<Vec<_>>(),
+            [1, 2]
+        );
 
         let mut clear_row = vec![0x01, 0x40];
         clear_row.extend_from_slice(&[0; 16]);
