@@ -8,8 +8,14 @@ CAPTURE_DIR="$STATE_DIR/capture"
 WORK_DIR="$STATE_DIR/bundle"
 BUNDLE_PATH="/tmp/pon-debug.tar.gz"
 RESTART_LOG="$STATE_DIR/restart.log"
+PRE_RESTART_DIR="$STATE_DIR/pre-restart"
 RESTART_FAILED=0
 STATE_LOG_BYTES=1048576
+CAPTURE_LOG_BYTES=65536
+CAPTURE_READY_SECONDS=10
+CAPTURE_PID=
+CAPTURE_LOG=
+CAPTURE_RUN=0
 DEBUG_VALUE=0
 
 safe_name() {
@@ -160,6 +166,8 @@ collect_bundle() {
 
 	# Stopping tcpdump flushes libpcap buffers before the bundle is compressed.
 	/etc/init.d/airoha-pon-debug stop >/dev/null 2>&1 || true
+	# procd returns before the capture helpers forward SIGTERM to tcpdump.
+	sleep 1
 	rm -rf "$WORK_DIR"
 	rm -f "$BUNDLE_PATH"
 	mkdir -p "$WORK_DIR"
@@ -173,6 +181,7 @@ collect_bundle() {
 	} > "$WORK_DIR/system.txt"
 	apk info -v > "$WORK_DIR/packages.txt" 2>&1 || true
 	[ ! -r "$RESTART_LOG" ] || cp "$RESTART_LOG" "$WORK_DIR/pon-restart.log"
+	[ ! -d "$PRE_RESTART_DIR" ] || cp -a "$PRE_RESTART_DIR" "$WORK_DIR/pre-restart"
 	copy_config
 
 	config_load pon
@@ -262,6 +271,81 @@ sample_frontend() {
 	done
 }
 
+interface_is_up() {
+	local flags
+
+	flags="$(cat "/sys/class/net/$1/flags" 2>/dev/null)" || return 1
+	[ $((flags & 1)) -eq 1 ]
+}
+
+trim_capture_output() {
+	local output="$1"
+	local limit_kb="$2"
+	local oldest size_kb
+
+	while true; do
+		size_kb="$(du -ck "$CAPTURE_DIR/$output"-*.pcap* 2>/dev/null | awk 'END { print $1 }')"
+		[ "${size_kb:-0}" -le "$limit_kb" ] && break
+		oldest="$(ls -1tr "$CAPTURE_DIR/$output"-*.pcap* 2>/dev/null | head -n 1)"
+		[ -n "$oldest" ] || break
+		rm -f "$oldest"
+	done
+}
+
+stop_capture() {
+	if [ -n "$CAPTURE_PID" ]; then
+		kill "$CAPTURE_PID" 2>/dev/null
+		wait
+		# Service stops would otherwise leave rings without an end marker.
+		date "+capture_stop=%Y-%m-%dT%H:%M:%S%z run=$CAPTURE_RUN status=stopped" >> "$CAPTURE_LOG"
+	fi
+	exit 0
+}
+
+capture_interface() {
+	local device="$1"
+	local output="$2"
+	local size_mb="$3"
+	local files="$4"
+	local size status
+	shift 4
+
+	CAPTURE_LOG="$CAPTURE_DIR/$output.log"
+	mkdir -p "$CAPTURE_DIR"
+	# procd signals only this shell; tcpdump must exit to flush its ring.
+	trap stop_capture INT TERM
+	while true; do
+		# tcpdump cannot open a down interface. An open capture survives later
+		# down/up cycles and exits only when the netdev is unregistered.
+		if ! interface_is_up "$device"; then
+			sleep 1
+			continue
+		fi
+		CAPTURE_RUN=$((CAPTURE_RUN + 1))
+		# Earlier rings of this output keep at most one ring of history.
+		trim_capture_output "$output" $((size_mb * files * 1024))
+		if [ -r "$CAPTURE_LOG" ]; then
+			size="$(wc -c < "$CAPTURE_LOG")"
+			[ "$size" -lt "$CAPTURE_LOG_BYTES" ] || mv -f "$CAPTURE_LOG" "$CAPTURE_LOG.1"
+		fi
+		date "+capture_start=%Y-%m-%dT%H:%M:%S%z run=$CAPTURE_RUN" >> "$CAPTURE_LOG"
+		/usr/bin/tcpdump -i "$device" -n -s 0 -U -C "$size_mb" -W "$files" \
+			-w "$CAPTURE_DIR/$output-$(date +%Y%m%d-%H%M%S)-$$-$CAPTURE_RUN.pcap" \
+			"$@" >> "$CAPTURE_LOG" 2>&1 &
+		CAPTURE_PID=$!
+		wait "$CAPTURE_PID"
+		status=$?
+		CAPTURE_PID=
+		date "+capture_stop=%Y-%m-%dT%H:%M:%S%z run=$CAPTURE_RUN status=$status" >> "$CAPTURE_LOG"
+		sleep 1
+	done
+}
+
+load_debug_value() {
+	config_load airoha-pon-debug
+	config_get_bool DEBUG_VALUE capture enabled 0
+}
+
 set_line_debug() {
 	uci set "airoha-pon-debug.capture.enabled=$DEBUG_VALUE"
 }
@@ -285,8 +369,7 @@ show_line_status() {
 show_status() {
 	local bytes=0
 
-	config_load airoha-pon-debug
-	config_get_bool DEBUG_VALUE capture enabled 0
+	load_debug_value
 	config_load pon
 	config_foreach show_line_status xpon
 	[ ! -d "$CAPTURE_DIR" ] || bytes="$(du -sk "$CAPTURE_DIR" | awk '{ print $1 * 1024 }')"
@@ -311,23 +394,96 @@ line_up() {
 	ip link set dev "$device" up || RESTART_FAILED=1
 }
 
+snapshot_before_restart() {
+	local WORK_DIR="$PRE_RESTART_DIR"
+
+	# pond keeps OMCI/OAM events in memory, so stopping it discards them.
+	rm -rf "$WORK_DIR"
+	mkdir -p "$WORK_DIR"
+	chmod 0700 "$STATE_DIR" "$WORK_DIR"
+	date '+captured_at=%Y-%m-%dT%H:%M:%S%z' > "$WORK_DIR/system.txt"
+	config_load pon
+	config_foreach capture_line_state xpon
+	config_foreach capture_omci_state omci
+	config_foreach capture_oam_state oam
+	write_command "$WORK_DIR/dmesg.txt" dmesg
+}
+
+add_control_capture() {
+	local section="$1"
+	local kind="$2"
+	local device
+
+	# Mirrors the init script, which only captures existing control netdevs.
+	config_get device "$section" device
+	[ -n "$device" ] && [ -e "/sys/class/net/$device" ] || return 0
+	CAPTURE_OUTPUTS="$CAPTURE_OUTPUTS $kind-$(safe_name "$section")"
+}
+
+add_omci_capture() {
+	local line
+
+	config_get line "$1" line
+	line_uses_epon "$line" && return 0
+	add_control_capture "$1" omci
+}
+
+add_oam_capture() {
+	local line
+
+	config_get line "$1" line
+	line_uses_epon "$line" || return 0
+	add_control_capture "$1" oam
+}
+
+wait_control_captures() {
+	local output deadline ready
+
+	[ -n "$CAPTURE_OUTPUTS" ] || return 0
+	deadline=$(($(date +%s) + CAPTURE_READY_SECONDS))
+	while true; do
+		ready=1
+		for output in $CAPTURE_OUTPUTS; do
+			# tcpdump's banner stays the last log line while its ring is attached.
+			tail -n 1 "$CAPTURE_DIR/$output.log" 2>/dev/null |
+				grep -q 'listening on' || ready=0
+		done
+		[ "$ready" -eq 1 ] && return 0
+		if [ "$(date +%s)" -ge "$deadline" ]; then
+			echo "control capture not attached after ${CAPTURE_READY_SECONDS}s:$CAPTURE_OUTPUTS"
+			return 1
+		fi
+		sleep 1
+	done
+}
+
 restart_pon() {
 	RESTART_FAILED=0
+	CAPTURE_OUTPUTS=
 	logger -t airoha-pon-debug "PON line restart requested"
 	mkdir -p "$STATE_DIR"
 	: > "$RESTART_LOG"
 
 	# LuCI expects a single JSON result, so service output goes to the restart log.
 	{
+		snapshot_before_restart
 		/etc/init.d/airoha-pond stop || RESTART_FAILED=1
 
 		config_load pon
 		config_foreach line_down xpon
 		sleep 1
 		/etc/init.d/pon restart || RESTART_FAILED=1
-		config_foreach line_up xpon
-		sleep 1
+
+		# pond raises the control netdevs; OMCI must be captured before PLOAM ranging.
+		load_debug_value
+		config_load pon
+		if [ "$DEBUG_VALUE" -eq 1 ]; then
+			config_foreach add_omci_capture omci
+			config_foreach add_oam_capture oam
+		fi
 		/etc/init.d/airoha-pond start || RESTART_FAILED=1
+		wait_control_captures
+		config_foreach line_up xpon
 	} >> "$RESTART_LOG" 2>&1
 
 	if [ "$RESTART_FAILED" -ne 0 ]; then
@@ -346,6 +502,10 @@ status) show_status ;;
 collect) collect_bundle ;;
 restart) restart_pon ;;
 sample) sample_frontend "$2" "$3" ;;
+capture)
+	shift
+	capture_interface "$@"
+	;;
 *)
 	printf 'usage: %s enable|disable|status|collect|restart\n' "$0" >&2
 	exit 2
