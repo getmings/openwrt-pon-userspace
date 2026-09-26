@@ -196,6 +196,11 @@ impl DataPathBackend {
                     .map(|path| path.gem_id);
                 self.publish_service_ready(service_ready);
             }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                /* EAGAIN: the kernel holds the request until PLOAM assigns every unicast Alloc-ID. */
+                self.publish_service_ready(false);
+                self.status.state = "waiting-for-alloc-id";
+            }
             Err(error) => {
                 self.publish_service_ready(false);
                 self.status.state = "apply-failed";

@@ -419,6 +419,9 @@ msgstr "厂商 ID"
 msgid "Waiting for GEM configuration"
 msgstr "等待 GEM 配置"
 
+msgid "Waiting for PLOAM Alloc-ID assignment"
+msgstr "等待 PLOAM 分配 Alloc-ID"
+
 msgid "XG-PON configuration"
 msgstr "XG-PON 配置"
 
