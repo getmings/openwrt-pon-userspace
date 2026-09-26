@@ -858,6 +858,15 @@ msgstr "IGMP 上行标签动作"
 msgid "IGMP upstream VLAN IDs"
 msgstr "IGMP 上行 VLAN ID"
 
+msgid "OLT broadcast keys"
+msgstr "OLT 广播密钥"
+
+msgid "Key index %s"
+msgstr "密钥索引 %s"
+
+msgid "Enhanced security disabled"
+msgstr "增强安全已禁用"
+
 msgid "Unchanged"
 msgstr "保持原样"
 

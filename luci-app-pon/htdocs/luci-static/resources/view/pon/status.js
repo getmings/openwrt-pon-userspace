@@ -196,6 +196,13 @@ function displayIgmpTagControl(values) {
 		: _('Not provisioned');
 }
 
+function displayBroadcastKeys(values) {
+	if (!values.enhanced_security)
+		return _('Enhanced security disabled');
+	return Array.isArray(values.broadcast_key_indexes) && values.broadcast_key_indexes.length > 0
+		? _('Key index %s').format(values.broadcast_key_indexes.join(', ')) : _('Not provisioned');
+}
+
 function loadProtocolStatus(section, unavailable, invalid) {
 	return L.resolveDefault(
 		fs.exec_direct('/usr/bin/pondctl', [ 'status', '--line', section.line ]), null
@@ -406,6 +413,7 @@ function renderOmci(item) {
 		row(_('Multicast downstream VLAN IDs'), displayMulticastVlanIds(values)),
 		row(_('IGMP upstream tag action'), displayIgmpTagControl(values)),
 		row(_('IGMP upstream VLAN IDs'), displayIgmpUpstreamVlanIds(values)),
+		row(_('OLT broadcast keys'), displayBroadcastKeys(values)),
 		row(_('Received OMCI messages'), values.rx_messages),
 		row(_('OMCI parse errors'), values.parse_errors)
 	]);
