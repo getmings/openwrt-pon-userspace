@@ -21,18 +21,19 @@ use super::security;
 #[allow(unused_imports)]
 pub use super::schema::{
     CLASS_ANI_G, CLASS_CARDHOLDER, CLASS_CIRCUIT_PACK, CLASS_CTC_LOID_AUTH,
-    CLASS_ENHANCED_SECURITY_CONTROL, CLASS_ETHERNET_PM_HISTORY_DATA,
-    CLASS_ETHERNET_PM_HISTORY_DATA_2, CLASS_ETHERNET_PM_HISTORY_DATA_3,
-    CLASS_EXTENDED_VLAN_TAGGING, CLASS_FEC_PM_HISTORY_DATA, CLASS_GAL_ETHERNET_PROFILE,
-    CLASS_GEM_INTERWORKING_TP, CLASS_GEM_PORT_NETWORK_CTP, CLASS_GEM_PORT_PM_HISTORY_DATA,
-    CLASS_IEEE_8021P_MAPPER, CLASS_MAC_BRIDGE_PORT_CONFIG_DATA,
-    CLASS_MAC_BRIDGE_PORT_FILTER_PREASSIGN_DATA, CLASS_MAC_BRIDGE_SERVICE_PROFILE,
-    CLASS_MULTICAST_GEM_INTERWORKING_TP, CLASS_MULTICAST_OPERATIONS_PROFILE,
-    CLASS_MULTICAST_SUBSCRIBER_CONFIG, CLASS_MULTICAST_SUBSCRIBER_MONITOR, CLASS_OLT_G, CLASS_OMCI,
-    CLASS_ONU2_G, CLASS_ONU_DATA, CLASS_ONU_G, CLASS_ONU_POWER_SHEDDING, CLASS_PPTP_ETHERNET_UNI,
-    CLASS_PRIORITY_QUEUE, CLASS_SOFTWARE_IMAGE, CLASS_TCONT, CLASS_THRESHOLD_DATA_1,
-    CLASS_THRESHOLD_DATA_2, CLASS_TRAFFIC_DESCRIPTOR, CLASS_TRAFFIC_SCHEDULER, CLASS_UNI_G,
-    CLASS_VEIP, CLASS_VENDOR_247, CLASS_VLAN_TAGGING_FILTER,
+    CLASS_ENHANCED_SECURITY_CONTROL, CLASS_ETHERNET_FRAME_EXTENDED_PM,
+    CLASS_ETHERNET_PM_HISTORY_DATA, CLASS_ETHERNET_PM_HISTORY_DATA_2,
+    CLASS_ETHERNET_PM_HISTORY_DATA_3, CLASS_EXTENDED_VLAN_TAGGING, CLASS_FEC_PM_HISTORY_DATA,
+    CLASS_GAL_ETHERNET_PROFILE, CLASS_GEM_INTERWORKING_TP, CLASS_GEM_PORT_NETWORK_CTP,
+    CLASS_GEM_PORT_PM_HISTORY_DATA, CLASS_IEEE_8021P_MAPPER, CLASS_MAC_BRIDGE_PORT_CONFIG_DATA,
+    CLASS_MAC_BRIDGE_PORT_FILTER_PREASSIGN_DATA, CLASS_MAC_BRIDGE_PORT_PM_HISTORY_DATA,
+    CLASS_MAC_BRIDGE_SERVICE_PROFILE, CLASS_MULTICAST_GEM_INTERWORKING_TP,
+    CLASS_MULTICAST_OPERATIONS_PROFILE, CLASS_MULTICAST_SUBSCRIBER_CONFIG,
+    CLASS_MULTICAST_SUBSCRIBER_MONITOR, CLASS_OLT_G, CLASS_OMCI, CLASS_ONU2_G, CLASS_ONU_DATA,
+    CLASS_ONU_G, CLASS_ONU_POWER_SHEDDING, CLASS_PPTP_ETHERNET_UNI, CLASS_PRIORITY_QUEUE,
+    CLASS_SOFTWARE_IMAGE, CLASS_TCONT, CLASS_THRESHOLD_DATA_1, CLASS_THRESHOLD_DATA_2,
+    CLASS_TRAFFIC_DESCRIPTOR, CLASS_TRAFFIC_SCHEDULER, CLASS_UNI_G, CLASS_VEIP, CLASS_VENDOR_247,
+    CLASS_VENDOR_351, CLASS_VLAN_TAGGING_FILTER,
 };
 
 const TCONT_COUNT: u16 = 16;
@@ -197,8 +198,13 @@ fn mac_bridge_port_filter_preassign_entity() -> ManagedEntity {
 fn omci_capability_entity(enhanced_security: bool) -> ManagedEntity {
     let mut entity = entity_from_definition(CLASS_OMCI, None).expect("OMCI schema is registered");
     let class_table = entity.attributes.get_mut(&1).expect("OMCI class table");
+    /*
+     * Class 351 lies in the vendor-specific range 350..399. Huawei OLTs create it without
+     * checking this table; advertising it could invite another vendor's layout.
+     */
     for definition in schema::MANAGED_ENTITIES.iter().filter(|definition| {
-        enhanced_security || definition.class_id != CLASS_ENHANCED_SECURITY_CONTROL
+        (enhanced_security || definition.class_id != CLASS_ENHANCED_SECURITY_CONTROL)
+            && definition.class_id != CLASS_VENDOR_351
     }) {
         let row = definition.class_id.to_be_bytes().to_vec();
         class_table.table_rows.insert(row.clone(), row);
@@ -392,6 +398,7 @@ impl Mib {
                     .read_write(8, vec![0])
                     .read_only(9, vec![0])
                     .read_only(10, vec![0; 16])
+                    .table(11, 18)
                     .read_only(12, 128u16.to_be_bytes().to_vec()),
             );
         }
@@ -494,7 +501,8 @@ impl Mib {
 
     pub fn dispatch(&mut self, request: &Request<'_>) -> Response {
         if request.class_id == CLASS_ENHANCED_SECURITY_CONTROL && !self.enhanced_security {
-            return Response::new(request, RESULT_COMMAND_NOT_SUPPORTED);
+            /* The disabled class is absent from the MIB and the OMCI class table, so it is an unknown ME. */
+            return Response::new(request, RESULT_UNKNOWN_ME);
         }
         let Some(definition) = schema::managed_entity(request.class_id) else {
             return Response::new(request, RESULT_UNKNOWN_ME);
@@ -850,6 +858,24 @@ impl Mib {
                 (1, false) => {
                     entity.attributes.get_mut(index).ok_or(())?.value = value.clone();
                     entity.attributes.get_mut(&3).ok_or(())?.value[0] = 0;
+                }
+                (11, true) => {
+                    /*
+                     * Broadcast key rows are keyed by the row identifier (key index
+                     * and fragment number). Row control bits 2..1 select set row,
+                     * clear row, or clear table.
+                     */
+                    let attribute = entity.attributes.get_mut(index).ok_or(())?;
+                    match value[0] & 0x03 {
+                        0 => {
+                            attribute.table_rows.insert(vec![value[1]], value.clone());
+                        }
+                        1 => {
+                            attribute.table_rows.remove(&[value[1]][..]);
+                        }
+                        2 => attribute.table_rows.clear(),
+                        _ => return Err(()),
+                    }
                 }
                 (3 | 8, false) if value[0] <= 1 => {
                     let attribute = entity.attributes.get_mut(index).ok_or(())?;
@@ -1733,10 +1759,108 @@ mod tests {
             payload: &content,
             content: &content,
         };
-        assert_eq!(
-            mib.dispatch(&set).result(),
-            Some(RESULT_COMMAND_NOT_SUPPORTED)
+        assert_eq!(mib.dispatch(&set).result(), Some(RESULT_UNKNOWN_ME));
+    }
+
+    #[test]
+    fn huawei_pm_creates_are_accepted() {
+        let mut mib = Mib::from_identity(&IdentityConfig::default());
+        /* Payloads captured from a Huawei XGS-PON OLT: PPTP 1 downstream control block and threshold data 4. */
+        let mut control_block = [0u8; 32];
+        control_block[..12].copy_from_slice(&[0, 0x0b, 0, 0x0b, 0, 0x01, 0, 0, 0, 0, 0, 0x02]);
+        let mut threshold = [0u8; 32];
+        threshold[1] = 0x04;
+
+        let class_rows = &mib.entities[&(CLASS_OMCI, 0)].attributes[&1].table_rows;
+        assert!(
+            class_rows.contains_key(&CLASS_MAC_BRIDGE_PORT_PM_HISTORY_DATA.to_be_bytes().to_vec())
         );
+        assert!(class_rows.contains_key(&CLASS_ETHERNET_FRAME_EXTENDED_PM.to_be_bytes().to_vec()));
+        assert!(!class_rows.contains_key(&CLASS_VENDOR_351.to_be_bytes().to_vec()));
+
+        for (class_id, payload) in [
+            (CLASS_ETHERNET_FRAME_EXTENDED_PM, &control_block),
+            (CLASS_MAC_BRIDGE_PORT_PM_HISTORY_DATA, &threshold),
+            (CLASS_VENDOR_351, &threshold),
+        ] {
+            let create = Request {
+                encoding: super::super::protocol::Encoding::Baseline,
+                tci: 1,
+                message_type: 0x44,
+                action: ACTION_CREATE,
+                class_id,
+                entity_id: 2,
+                attribute_mask: 0,
+                payload,
+                content: payload,
+            };
+            assert_eq!(mib.dispatch(&create).result(), Some(RESULT_SUCCESS));
+            let get = Request {
+                message_type: 0x49,
+                action: ACTION_GET,
+                attribute_mask: 0xc000,
+                ..create
+            };
+            assert_eq!(mib.dispatch(&get).result(), Some(RESULT_SUCCESS));
+            let delete = Request {
+                message_type: 0x46,
+                action: ACTION_DELETE,
+                ..create
+            };
+            assert_eq!(mib.dispatch(&delete).result(), Some(RESULT_SUCCESS));
+        }
+
+        let entity = entity_from_definition(CLASS_ETHERNET_FRAME_EXTENDED_PM, Some(&control_block))
+            .expect("extended PM schema is registered");
+        assert_eq!(entity.attributes[&2].value, control_block[..16]);
+        assert!(!entity.attributes[&16].upload);
+    }
+
+    #[test]
+    fn enhanced_security_accepts_broadcast_key_rows() {
+        let mut mib = Mib::from_identity(&IdentityConfig::default());
+        let set = |mib: &mut Mib, row: &[u8]| {
+            mib.dispatch(&Request {
+                encoding: super::super::protocol::Encoding::Baseline,
+                tci: 1,
+                message_type: 0x48,
+                action: ACTION_SET,
+                class_id: CLASS_ENHANCED_SECURITY_CONTROL,
+                entity_id: 0,
+                attribute_mask: 0x0020,
+                payload: row,
+                content: row,
+            })
+            .result()
+        };
+        let rows = |mib: &Mib| {
+            mib.entities[&(CLASS_ENHANCED_SECURITY_CONTROL, 0)].attributes[&11]
+                .table_rows
+                .len()
+        };
+
+        /* Key indexes 1 and 2, fragment 0, as distributed by a Huawei XGS-PON OLT. */
+        let mut key1 = vec![0x00, 0x40];
+        key1.extend_from_slice(&[0x50; 16]);
+        let mut key2 = vec![0x00, 0x80];
+        key2.extend_from_slice(&[0xf5; 16]);
+        assert_eq!(set(&mut mib, &key1), Some(RESULT_SUCCESS));
+        assert_eq!(set(&mut mib, &key2), Some(RESULT_SUCCESS));
+        assert_eq!(rows(&mib), 2);
+
+        let mut clear_row = vec![0x01, 0x40];
+        clear_row.extend_from_slice(&[0; 16]);
+        assert_eq!(set(&mut mib, &clear_row), Some(RESULT_SUCCESS));
+        assert_eq!(rows(&mib), 1);
+
+        let mut clear_table = vec![0x02, 0x00];
+        clear_table.extend_from_slice(&[0; 16]);
+        assert_eq!(set(&mut mib, &clear_table), Some(RESULT_SUCCESS));
+        assert_eq!(rows(&mib), 0);
+
+        let mut reserved = vec![0x03, 0x40];
+        reserved.extend_from_slice(&[0; 16]);
+        assert_eq!(set(&mut mib, &reserved), Some(RESULT_ATTRIBUTE_FAILED));
     }
 
     #[test]

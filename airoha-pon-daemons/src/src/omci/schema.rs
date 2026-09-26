@@ -16,6 +16,7 @@ pub const CLASS_PPTP_ETHERNET_UNI: u16 = 11;
 pub const CLASS_ETHERNET_PM_HISTORY_DATA: u16 = 24;
 pub const CLASS_MAC_BRIDGE_SERVICE_PROFILE: u16 = 45;
 pub const CLASS_MAC_BRIDGE_PORT_CONFIG_DATA: u16 = 47;
+pub const CLASS_MAC_BRIDGE_PORT_PM_HISTORY_DATA: u16 = 52;
 pub const CLASS_MAC_BRIDGE_PORT_FILTER_PREASSIGN_DATA: u16 = 79;
 pub const CLASS_VLAN_TAGGING_FILTER: u16 = 84;
 pub const CLASS_ETHERNET_PM_HISTORY_DATA_2: u16 = 89;
@@ -47,6 +48,8 @@ pub const CLASS_MULTICAST_SUBSCRIBER_MONITOR: u16 = 311;
 pub const CLASS_FEC_PM_HISTORY_DATA: u16 = 312;
 pub const CLASS_VEIP: u16 = 329;
 pub const CLASS_ENHANCED_SECURITY_CONTROL: u16 = 332;
+pub const CLASS_ETHERNET_FRAME_EXTENDED_PM: u16 = 334;
+pub const CLASS_VENDOR_351: u16 = 351;
 pub const CLASS_CTC_LOID_AUTH: u16 = 0xfffa;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -532,6 +535,7 @@ const ENHANCED_SECURITY_ATTRIBUTES: &[AttributeDefinition] = &[
     AttributeDefinition::read_write(8, 1),
     AttributeDefinition::read_only(9, 1),
     AttributeDefinition::read_only(10, 16),
+    AttributeDefinition::read_write_table(11, 18),
     AttributeDefinition::read_only(12, 2).with_default(SECURITY_KEY_LENGTH),
 ];
 
@@ -599,6 +603,42 @@ const FEC_PM_ATTRIBUTES: &[AttributeDefinition] = &[
     AttributeDefinition::read_only(7, 2).runtime_only(),
 ];
 
+const MAC_BRIDGE_PORT_PM_ATTRIBUTES: &[AttributeDefinition] = &[
+    AttributeDefinition::read_only(1, 1),
+    AttributeDefinition::read_write(2, 2).required(0),
+    AttributeDefinition::read_only(3, 4).runtime_only(),
+    AttributeDefinition::read_only(4, 4).runtime_only(),
+    AttributeDefinition::read_only(5, 4).runtime_only(),
+    AttributeDefinition::read_only(6, 4).runtime_only(),
+    AttributeDefinition::read_only(7, 4).runtime_only(),
+];
+
+/* Attribute 2 is the 16-byte control block: threshold data, parent ME, accumulation and direction controls. */
+const ETHERNET_FRAME_EXTENDED_PM_ATTRIBUTES: &[AttributeDefinition] = &[
+    AttributeDefinition::read_only(1, 1),
+    AttributeDefinition::read_write(2, 16).required(0),
+    AttributeDefinition::read_only(3, 4).runtime_only(),
+    AttributeDefinition::read_only(4, 4).runtime_only(),
+    AttributeDefinition::read_only(5, 4).runtime_only(),
+    AttributeDefinition::read_only(6, 4).runtime_only(),
+    AttributeDefinition::read_only(7, 4).runtime_only(),
+    AttributeDefinition::read_only(8, 4).runtime_only(),
+    AttributeDefinition::read_only(9, 4).runtime_only(),
+    AttributeDefinition::read_only(10, 4).runtime_only(),
+    AttributeDefinition::read_only(11, 4).runtime_only(),
+    AttributeDefinition::read_only(12, 4).runtime_only(),
+    AttributeDefinition::read_only(13, 4).runtime_only(),
+    AttributeDefinition::read_only(14, 4).runtime_only(),
+    AttributeDefinition::read_only(15, 4).runtime_only(),
+    AttributeDefinition::read_only(16, 4).runtime_only(),
+];
+
+/* Huawei OLTs create vendor class 351 like a PM ME whose only create field is the threshold data pointer; its counters are not public. */
+const VENDOR_351_ATTRIBUTES: &[AttributeDefinition] = &[
+    AttributeDefinition::read_only(1, 1),
+    AttributeDefinition::read_write(2, 2).required(0),
+];
+
 pub static MANAGED_ENTITIES: &[ManagedEntityDefinition] = &[
     ManagedEntityDefinition {
         class_id: CLASS_ONU_DATA,
@@ -660,6 +700,13 @@ pub static MANAGED_ENTITIES: &[ManagedEntityDefinition] = &[
         origin: ManagedEntityOrigin::Olt,
         actions: ACTIONS_OLT_RW,
         attributes: MAC_BRIDGE_PORT_ATTRIBUTES,
+    },
+    ManagedEntityDefinition {
+        class_id: CLASS_MAC_BRIDGE_PORT_PM_HISTORY_DATA,
+        name: "MAC bridge port PM history data",
+        origin: ManagedEntityOrigin::Olt,
+        actions: ACTIONS_PM,
+        attributes: MAC_BRIDGE_PORT_PM_ATTRIBUTES,
     },
     ManagedEntityDefinition {
         class_id: CLASS_MAC_BRIDGE_PORT_FILTER_PREASSIGN_DATA,
@@ -877,6 +924,20 @@ pub static MANAGED_ENTITIES: &[ManagedEntityDefinition] = &[
         origin: ManagedEntityOrigin::Onu,
         actions: ACTIONS_ONU_RW | action_bit(ACTION_GET_NEXT),
         attributes: ENHANCED_SECURITY_ATTRIBUTES,
+    },
+    ManagedEntityDefinition {
+        class_id: CLASS_ETHERNET_FRAME_EXTENDED_PM,
+        name: "Ethernet frame extended PM",
+        origin: ManagedEntityOrigin::Olt,
+        actions: ACTIONS_PM,
+        attributes: ETHERNET_FRAME_EXTENDED_PM_ATTRIBUTES,
+    },
+    ManagedEntityDefinition {
+        class_id: CLASS_VENDOR_351,
+        name: "Vendor class 351",
+        origin: ManagedEntityOrigin::Olt,
+        actions: ACTIONS_PM,
+        attributes: VENDOR_351_ATTRIBUTES,
     },
     ManagedEntityDefinition {
         class_id: CLASS_CTC_LOID_AUTH,
