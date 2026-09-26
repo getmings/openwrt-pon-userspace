@@ -108,6 +108,11 @@ pub fn run_agent(
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(error) => {
                 status.record_transport_error(&error.to_string());
+                if line_is_down(&error) && socket.interface_present() {
+                    // Retransmissions never span a line down; the MIB itself is retained.
+                    cache.clear();
+                    continue;
+                }
                 return Err(error);
             }
         };
@@ -172,6 +177,7 @@ pub fn run_agent(
         if let Err(error) = socket.send(response.as_bytes()) {
             status.record_transport_error(&error.to_string());
             if line_is_down(&error) {
+                cache.clear();
                 continue;
             }
             return Err(error);

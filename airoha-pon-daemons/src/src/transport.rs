@@ -74,6 +74,7 @@ pub struct ReceivedFrame<'a> {
 
 pub struct PacketSocket {
     fd: c_int,
+    name: CString,
     address: SockAddrLl,
 }
 
@@ -128,7 +129,14 @@ impl PacketSocket {
             );
         }
 
-        Ok(Self { fd, address })
+        Ok(Self { fd, name, address })
+    }
+
+    // AF_PACKET reports ENETDOWN once for both administrative down and
+    // unregistration; only the former re-arms the socket on the next NETDEV_UP.
+    pub fn interface_present(&self) -> bool {
+        let ifindex = unsafe { if_nametoindex(self.name.as_ptr()) };
+        ifindex != 0 && ifindex as i32 == self.address.sll_ifindex
     }
 
     pub fn receive<'a>(&self, buffer: &'a mut [u8]) -> io::Result<ReceivedFrame<'a>> {
