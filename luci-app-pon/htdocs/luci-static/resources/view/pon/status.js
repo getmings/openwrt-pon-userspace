@@ -275,9 +275,9 @@ function loadStatus() {
 }
 
 function row(label, value) {
-	return E('tr', {}, [
-		E('td', { 'style': 'width: 42%' }, label),
-		E('td', {}, value == null || value === '' ? _('Unknown') : String(value))
+	return E('tr', { 'class': 'tr' }, [
+		E('td', { 'class': 'td left', 'style': 'width: 42%' }, label),
+		E('td', { 'class': 'td left' }, value == null || value === '' ? _('Unknown') : String(value))
 	]);
 }
 
