@@ -122,6 +122,8 @@ function displayBackendState(value) {
 	switch (value) {
 	case 'inactive': return _('PON line stopped');
 	case 'waiting-for-gem': return _('Waiting for GEM configuration');
+	case 'waiting-for-alloc-id': return _('Waiting for PLOAM Alloc-ID assignment');
+	case 'alloc-id-timeout': return _('PLOAM did not assign the Alloc-IDs in time');
 	case 'kernel-mapping-present': return _('Existing kernel mapping');
 	case 'applied': return _('Applied');
 	case 'multiple-gems-unsupported': return _('Multiple data paths require packet classification');

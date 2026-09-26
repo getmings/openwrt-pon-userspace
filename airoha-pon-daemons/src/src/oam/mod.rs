@@ -55,6 +55,10 @@ pub fn run_agent(interface: &str, config: OamConfig, control_socket: &Path) -> i
         let received = match socket.receive(&mut receive_buffer) {
             Ok(frame) => frame,
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if line_is_down(&error) && socket.interface_present() => {
+                status.record_event("line", "PON control netdev is down".to_owned());
+                continue;
+            }
             Err(error) => return Err(error),
         };
         if received.packet_type == PACKET_OUTGOING {

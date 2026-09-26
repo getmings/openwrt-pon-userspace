@@ -6,6 +6,8 @@ use crate::config::Section;
 pub struct IdentityConfig {
     pub omcc_version: u8,
     pub disable_enhanced_security: bool,
+    /// Seconds a data path may wait for PLOAM Alloc-IDs before it is reported as failed; 0 never fails.
+    pub alloc_id_timeout: u32,
     pub vendor_id: Vec<u8>,
     pub equipment_id: Vec<u8>,
     pub hardware_version: Vec<u8>,
@@ -21,6 +23,7 @@ impl Default for IdentityConfig {
         Self {
             omcc_version: 0xb0,
             disable_enhanced_security: false,
+            alloc_id_timeout: 30,
             vendor_id: b"OWRT".to_vec(),
             equipment_id: b"AN7581-XG-PON-ONU".to_vec(),
             hardware_version: b"AN7581".to_vec(),
@@ -41,6 +44,18 @@ impl IdentityConfig {
             _ => 0xb0,
         };
         config.disable_enhanced_security = section.option("disable_enhanced_security") == Some("1");
+        if let Some(value) = section
+            .option("alloc_id_timeout")
+            .filter(|value| !value.is_empty())
+        {
+            match value.parse() {
+                Ok(seconds) => config.alloc_id_timeout = seconds,
+                Err(_) => println!(
+                    "Invalid OMCI alloc_id_timeout {value:?}; using {} s",
+                    config.alloc_id_timeout
+                ),
+            }
+        }
 
         for (name, destination) in [
             ("vendor_id", &mut config.vendor_id),
@@ -155,7 +170,8 @@ mod tests {
             "config omci 'line0_omci'\n\
              \toption line 'line0'\n\
              \toption omcc_version '0x86'\n\
-             \toption disable_enhanced_security '1'\n",
+             \toption disable_enhanced_security '1'\n\
+             \toption alloc_id_timeout '0'\n",
         )
         .unwrap();
         let identity =
@@ -163,7 +179,9 @@ mod tests {
 
         assert_eq!(identity.omcc_version, 0x86);
         assert!(identity.disable_enhanced_security);
+        assert_eq!(identity.alloc_id_timeout, 0);
         assert_eq!(IdentityConfig::default().omcc_version, 0xb0);
         assert!(!IdentityConfig::default().disable_enhanced_security);
+        assert_eq!(IdentityConfig::default().alloc_id_timeout, 30);
     }
 }

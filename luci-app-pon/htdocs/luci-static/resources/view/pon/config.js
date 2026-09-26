@@ -216,6 +216,12 @@ return view.extend({
 		o.default = '0';
 		o.rmempty = true;
 
+		o = s.taboption('compatibility', form.Value, 'alloc_id_timeout', _('Alloc-ID wait timeout'));
+		o.datatype = 'uinteger';
+		o.placeholder = '30';
+		o.rmempty = true;
+		o.description = _('Seconds a data path may wait for PLOAM to assign its Alloc-ID before it is reported as failed. The ONU keeps waiting afterwards; 0 disables the timeout.');
+
 		s = m.section(form.TypedSection, 'oam', _('EPON OAM settings'));
 		s.anonymous = false;
 		s.addremove = false;
