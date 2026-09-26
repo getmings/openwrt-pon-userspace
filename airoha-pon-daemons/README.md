@@ -22,6 +22,7 @@ config omci 'line0_omci'
 	option device 'omci0'
 	option omcc_version '0xb0'
 	option disable_enhanced_security '0'
+	option alloc_id_timeout '30'
 	option vendor_id 'ABCD'
 	option equipment_id ''
 	option hardware_version ''
@@ -51,6 +52,10 @@ config oam 'line0_oam'
 `mode` accepts `xgpon`, `xgspon`, `epon-10g-1g` and `epon-10g-10g`. An empty value keeps the current driver mode. `omcc_version` accepts `0xb0` and `0x86`.
 
 `mode` 支持 `xgpon`、`xgspon`、`epon-10g-1g` 和 `epon-10g-10g`。空值使用驱动当前模式。`omcc_version` 支持 `0xb0` 和 `0x86`。
+
+`alloc_id_timeout` is the number of seconds an OMCI data path may wait for PLOAM to assign its Alloc-ID before the data path state becomes `alloc-id-timeout`. The kernel keeps the request, so a later assignment still applies it. `0` disables the timeout.
+
+`alloc_id_timeout` 是 OMCI 数据通道等待 PLOAM 分配 Alloc-ID 的秒数，超时后数据通道状态变为 `alloc-id-timeout`。内核仍保留该请求，之后分配到时照常生效。`0` 表示不超时。
 
 ## CLI
 

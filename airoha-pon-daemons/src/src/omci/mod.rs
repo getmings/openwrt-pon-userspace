@@ -75,7 +75,7 @@ pub fn run_agent(
     let loid_configured = !identity.loid.is_empty();
     let omcc_version = identity.omcc_version;
     let disable_enhanced_security = identity.disable_enhanced_security;
-    let mut backend = DataPathBackend::for_omci_interface(interface)?;
+    let mut backend = DataPathBackend::for_omci_interface(interface, identity.alloc_id_timeout)?;
     if let Some(serial) = backend.active_serial_number()? {
         identity.serial_number = serial.to_vec();
     }
@@ -103,6 +103,24 @@ pub fn run_agent(
     );
 
     loop {
+        if let Some(interval) = backend.recheck_interval() {
+            match socket.wait_readable(interval) {
+                Ok(true) => {}
+                Ok(false) => {
+                    // The kernel may have applied deferred paths since the last OMCI request.
+                    let provisioning = mib.provisioning_snapshot();
+                    backend.reconcile(&provisioning);
+                    status.record_provisioning(
+                        provisioning,
+                        mib.data_path_graph(),
+                        backend.status(),
+                    );
+                    continue;
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
+            }
+        }
         let received = match socket.receive(&mut receive_buffer) {
             Ok(frame) => frame,
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,

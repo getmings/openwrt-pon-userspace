@@ -2,11 +2,15 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::runtime::parent_xpon_attribute;
 
 use super::config::decode_hex;
 use super::provisioning::{DataPathCandidate, ProvisioningSnapshot, DATA_PATH_VLAN_ANY};
+
+/* The kernel applies deferred paths on its own; pond polls to report the outcome. */
+const ALLOC_ID_RECHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug)]
 pub struct BackendStatus {
@@ -36,10 +40,12 @@ pub struct DataPathBackend {
     active_serial_number: PathBuf,
     applied: Vec<DataPathCandidate>,
     status: BackendStatus,
+    alloc_id_timeout: Option<Duration>,
+    waiting_since: Option<Instant>,
 }
 
 impl DataPathBackend {
-    pub fn for_omci_interface(interface: &str) -> io::Result<Self> {
+    pub fn for_omci_interface(interface: &str, alloc_id_timeout: u32) -> io::Result<Self> {
         let data_path = parent_xpon_attribute(interface, "data_path")?.ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
@@ -74,11 +80,21 @@ impl DataPathBackend {
             active_serial_number,
             applied,
             status,
+            alloc_id_timeout: (alloc_id_timeout != 0)
+                .then(|| Duration::from_secs(alloc_id_timeout.into())),
+            waiting_since: None,
         })
+    }
+
+    /// Interval at which the caller should reconcile again without new OMCI requests.
+    pub fn recheck_interval(&self) -> Option<Duration> {
+        self.waiting_since.map(|_| ALLOC_ID_RECHECK_INTERVAL)
     }
 
     pub fn reconcile(&mut self, snapshot: &ProvisioningSnapshot) {
         self.status.error = None;
+        /* Only a repeated EAGAIN keeps the wait running. */
+        let waiting_since = self.waiting_since.take();
 
         /* A new PON epoch clears hardware GEM mappings while the OMCI MIB retains provisioned state. */
         self.applied = match read_current_mapping(&self.data_path) {
@@ -163,6 +179,12 @@ impl DataPathBackend {
             return;
         }
         if self.applied == desired {
+            if let Some(since) = waiting_since {
+                println!(
+                    "OMCI data paths: kernel applied the deferred paths after {} s",
+                    since.elapsed().as_secs()
+                );
+            }
             self.status.state = "applied";
             self.publish_service_ready(service_ready);
             return;
@@ -197,9 +219,29 @@ impl DataPathBackend {
                 self.publish_service_ready(service_ready);
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                /* EAGAIN: the kernel holds the request until PLOAM assigns every unicast Alloc-ID. */
+                /*
+                 * EAGAIN: the kernel holds the request until PLOAM assigns every unicast
+                 * Alloc-ID. A timeout only reports the failure; a late assignment still applies.
+                 */
                 self.publish_service_ready(false);
-                self.status.state = "waiting-for-alloc-id";
+                let since = waiting_since.unwrap_or_else(Instant::now);
+                self.waiting_since = Some(since);
+                match self.alloc_id_timeout {
+                    Some(timeout) if since.elapsed() >= timeout => {
+                        if self.status.state != "alloc-id-timeout" {
+                            println!(
+                                "OMCI data paths: PLOAM has not assigned every Alloc-ID after {} s",
+                                timeout.as_secs()
+                            );
+                        }
+                        self.status.state = "alloc-id-timeout";
+                        self.status.error = Some(format!(
+                            "PLOAM has not assigned every Alloc-ID after {} s",
+                            timeout.as_secs()
+                        ));
+                    }
+                    _ => self.status.state = "waiting-for-alloc-id",
+                }
             }
             Err(error) => {
                 self.publish_service_ready(false);

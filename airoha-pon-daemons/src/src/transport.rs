@@ -3,7 +3,8 @@
 use std::ffi::CString;
 use std::io;
 use std::mem::{size_of, zeroed};
-use std::os::raw::{c_char, c_int, c_uint, c_void};
+use std::os::raw::{c_char, c_int, c_uint, c_ulong, c_void};
+use std::time::Duration;
 
 const AF_PACKET: c_int = 17;
 const SOCK_RAW: c_int = 3;
@@ -11,6 +12,7 @@ const ETH_P_ALL: u16 = 0x0003;
 const SOL_PACKET: c_int = 263;
 const PACKET_IGNORE_OUTGOING: c_int = 23;
 const ENETDOWN: i32 = 100;
+const POLLIN: i16 = 0x0001;
 pub const PACKET_OUTGOING: u8 = 4;
 
 type SockLen = u32;
@@ -29,6 +31,13 @@ struct SockAddrLl {
     sll_pkttype: u8,
     sll_halen: u8,
     sll_addr: [u8; 8],
+}
+
+#[repr(C)]
+struct PollFd {
+    fd: c_int,
+    events: i16,
+    revents: i16,
 }
 
 #[repr(C)]
@@ -63,6 +72,7 @@ extern "C" {
         option_value: *const c_void,
         option_length: SockLen,
     ) -> c_int;
+    fn poll(fds: *mut PollFd, count: c_ulong, timeout: c_int) -> c_int;
     fn close(fd: c_int) -> c_int;
     fn if_nametoindex(name: *const c_char) -> c_uint;
 }
@@ -137,6 +147,21 @@ impl PacketSocket {
     pub fn interface_present(&self) -> bool {
         let ifindex = unsafe { if_nametoindex(self.name.as_ptr()) };
         ifindex != 0 && ifindex as i32 == self.address.sll_ifindex
+    }
+
+    /// Returns false when `timeout` passes without a frame or a pending socket error.
+    pub fn wait_readable(&self, timeout: Duration) -> io::Result<bool> {
+        let mut entry = PollFd {
+            fd: self.fd,
+            events: POLLIN,
+            revents: 0,
+        };
+        let timeout = timeout.as_millis().min(c_int::MAX as u128) as c_int;
+        let ready = unsafe { poll(&mut entry, 1, timeout) };
+        if ready < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(ready > 0)
     }
 
     pub fn receive<'a>(&self, buffer: &'a mut [u8]) -> io::Result<ReceivedFrame<'a>> {

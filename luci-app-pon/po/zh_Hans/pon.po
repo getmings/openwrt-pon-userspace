@@ -422,6 +422,9 @@ msgstr "等待 GEM 配置"
 msgid "Waiting for PLOAM Alloc-ID assignment"
 msgstr "等待 PLOAM 分配 Alloc-ID"
 
+msgid "PLOAM did not assign the Alloc-IDs in time"
+msgstr "PLOAM 超时未分配 Alloc-ID"
+
 msgid "XG-PON configuration"
 msgstr "XG-PON 配置"
 
@@ -923,3 +926,9 @@ msgstr "使用华为 OLT 且 ONU 无法注册上线时，建议尝试 OMCC 版�
 
 msgid "Disable enhanced security (Class 332)"
 msgstr "禁用增强安全（Class 332）"
+
+msgid "Alloc-ID wait timeout"
+msgstr "Alloc-ID 等待超时"
+
+msgid "Seconds a data path may wait for PLOAM to assign its Alloc-ID before it is reported as failed. The ONU keeps waiting afterwards; 0 disables the timeout."
+msgstr "数据通道等待 PLOAM 分配 Alloc-ID 的秒数，超过后报告失败。之后 ONU 仍会继续等待；0 表示不超时。"
